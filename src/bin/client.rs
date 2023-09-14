@@ -62,21 +62,23 @@ async fn main() {
         }
         opt => {
             match match opt {
-                Opt::Set { key, value, ex } => {
+                Opt::Set { key, value, ex,transaction_id } => {
                     client
                         .set(SetRequest {
                             key: FastStr::from(Arc::new(key)),
                             value: FastStr::from(Arc::new(value)),
                             expire_time: ex,
                             sync: false,
+                            transaction_id,
                         })
                         .await
                 }
-                Opt::Del { key } => {
+                Opt::Del { key ,transaction_id} => {
                     client
                         .del(DelRequest {
                             key: FastStr::from(Arc::new(key)),
                             sync: false,
+                            transaction_id,
                         })
                         .await
                 }
@@ -94,6 +96,15 @@ async fn main() {
                         })
                         .await
                 }
+                Opt::Multi{} => {
+                    client.multi().await
+                },
+                Opt::Exec{transaction_id} => {
+                    client.exec(transaction_id).await
+                },
+                Opt::Watch{key, transaction_id} => {
+                    client.watch(key.into(), transaction_id).await
+                },
                 _ => {
                     unreachable!()
                 }

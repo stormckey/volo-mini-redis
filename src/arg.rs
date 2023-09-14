@@ -10,10 +10,14 @@ pub enum Opt {
         value: String,
         #[structopt(short, long)]
         ex: Option<i32>,
+        #[structopt(short, long)]
+        transaction_id: Option<i32>,
     },
     Del {
         #[structopt(help = "Key")]
         key: String,
+        #[structopt(short, long)]
+        transaction_id: Option<i32>,
     },
     #[structopt(about = "Get the value for a key")]
     Get {
@@ -35,6 +39,17 @@ pub enum Opt {
         channel: String,
         #[structopt(help = "Value")]
         value: String,
+    },
+    Multi {},
+    Exec {
+        #[structopt(help = "Transaction id")]
+        transaction_id: i32,
+    },
+    Watch {
+        #[structopt(help = "Key")]
+        key: String,
+        #[structopt(help = "Transaction id")]
+        transaction_id: i32,
     },
 }
 

@@ -11,7 +11,7 @@ struct SetRequest{
 struct DelRequest{
     1: required string key,
     2: required bool sync,
-    3: optional i32 tranaction_id,
+    3: optional i32 transaction_id,
 }
 
 struct SubsrcibeRequest{
@@ -41,7 +41,7 @@ service RedisService {
     string ping(1: string message),
     SubscribeResponse subscribe(1: SubsrcibeRequest request),
     string publish(1: PublishRequest request),
-    i32 multi(),
+    string multi(),
     map<string,string> register(1: string port),
     string exec(1: i32 transaction_id),
     string watch(1: string key, 2: i32 transaction_id),

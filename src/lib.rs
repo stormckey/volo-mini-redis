@@ -2,6 +2,7 @@
 
 use anyhow::anyhow;
 use futures::future::select_all;
+use volo_gen::mini_redis::SetRequest;
 use std::collections::HashMap;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -30,28 +31,9 @@ pub struct Proxy {
     pub servers: Vec<Vec<String>>,
     pub id: tokio::sync::Mutex<i32>,
     pub transactions: tokio::sync::Mutex<HashMap<i32, Vec<(Option<volo_gen::mini_redis::SetRequest>,Option<volo_gen::mini_redis::DelRequest>)>>>,
+    pub watches: tokio::sync::Mutex<HashMap<i32,Vec<(String,String)>>>,
 }
 pub struct P {}
-
-// impl Drop for S {
-//     fn drop(&mut self) {
-//         let file_clone = Arc::clone(&self.file.clone().unwrap());
-//         let buf_clone = Arc::clone(&self.buf);
-//         let handle = tokio::spawn(async move {
-//                 let mut file = file_clone.lock().await;
-//                 let mut buf = buf_clone.lock().await;
-//                 file.write_all((buf.join("\n") + "\n").as_bytes())
-//                     .unwrap();
-//                 buf.clear();
-//         });
-//         self.handles.lock().await.push(handle);
-//         tokio::join!(async {
-//             for handle in self.handles.lock().await.iter_mut() {
-//                 handle.await.unwrap();
-//             }
-//         });
-//     }
-// }
 
 #[volo::async_trait]
 impl volo_gen::mini_redis::RedisService for Proxy {
@@ -102,6 +84,19 @@ impl volo_gen::mini_redis::RedisService for Proxy {
         &self,
         _request: volo_gen::mini_redis::DelRequest,
     ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
+        if _request.transaction_id.is_some() {
+            let mut transactions = self.transactions.lock().await;
+            let mut id = self.id.lock().await;
+            if !transactions.contains_key(&_request.transaction_id.clone().unwrap()) {
+                transactions.insert(*id, vec![]);
+                *id += 1;
+            }
+            transactions
+                .get_mut(&_request.transaction_id.clone().unwrap())
+                .unwrap()
+                .push((None,Some(_request.clone())));
+            return Ok("Ok".into());
+        }
         let clients = self.clients.lock().await;
         let idx1 = _request.key.as_str().as_bytes()[0] as usize % clients.len();
         let client = clients[idx1][0].clone();
@@ -146,25 +141,89 @@ impl volo_gen::mini_redis::RedisService for Proxy {
     }
     async fn multi(
         &self,
-    ) -> ::core::result::Result<i32, ::volo_thrift::AnyhowError> {
+    ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
         let mut transactions = self.transactions.lock().await;
         let mut id = self.id.lock().await;
         transactions.insert(*id, vec![]);
         *id += 1;
-        Ok(*id )
+        let id = *id - 1;
+        Ok(id.to_string().into())
     }
     async fn exec(
         &self,
         _transaction_id: i32,
     ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
-        Err(anyhow!("Cant exec on slave").into())
+        if !self.transactions.lock().await.contains_key(&_transaction_id) {
+            return Err(anyhow!("No such transaction").into());
+        };
+        //check the watches
+        let mut watches = self.watches.lock().await;
+        if watches.contains_key(&_transaction_id) {
+            for (key,value) in watches.get_mut(&_transaction_id).unwrap() {
+                let clients = self.clients.lock().await;
+                let idx1 = key.as_str().as_bytes()[0] as usize % clients.len();
+                let idx2 = *self.count[idx1].lock().await % (clients[idx1].len() - 1) + 1;
+                *self.count[idx1].lock().await += 1;
+                println!("Request is forwarded to port {}", self.servers[idx1][idx2]);
+                let client = clients[idx1][idx2].clone();
+                let resp = client.get(key.clone().into()).await;
+                match resp {
+                    Err(e) => return Err(e.into()),
+                    Ok(res) => {
+                        if res != *value {
+                            return Err(anyhow!("Watch failed").into());
+                        }
+                    }
+                }
+            }
+        }
+        let mut transactions = self.transactions.lock().await;
+        for (set,del) in transactions.get_mut(&_transaction_id).unwrap() {
+            if set.is_some() {
+                let clients = self.clients.lock().await;
+                let idx1 = set.as_ref().unwrap().key.as_str().as_bytes()[0] as usize % clients.len();
+                println!("Request is forwarded to port {}", self.servers[idx1][0]);
+                let set = SetRequest {
+                    transaction_id: None,
+                    ..set.as_ref().unwrap().clone()
+                };
+                let client =
+                    clients[set.key.as_str().as_bytes()[0] as usize % clients.len()][0].clone();
+                match client.set(set.clone()).await {
+                    Err(e) =>   return Err(anyhow!(e)),
+                    _ => {}
+                };
+            }
+            if del.is_some() {
+                let clients = self.clients.lock().await;
+                let idx1 = del.as_ref().unwrap().key.as_str().as_bytes()[0] as usize % clients.len();
+                let client = clients[idx1][0].clone();
+                println!("Request is forwarded to port {}", self.servers[idx1][0]);
+                let del = DelRequest {
+                    transaction_id: None,
+                    ..del.as_ref().unwrap().clone()
+                };
+                match client.del(del.clone()).await {
+                    Err(e) => return Err(anyhow!(e)),
+                    _ => {}
+                };
+            }
+        };
+        transactions.remove(&_transaction_id);
+        Ok("Ok".into())
     }
     async fn watch(
         &self,
         _key: FastStr,
         _transaction_id: i32,
     ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
-        Err(anyhow!("Cant watch on slave").into())
+        let value = self.get(_key.clone()).await?;
+        let mut watches = self.watches.lock().await;
+        if !watches.contains_key(&_transaction_id) {
+            watches.insert(_transaction_id,vec![]);
+        };
+        watches.get_mut(&_transaction_id).unwrap().push((_key.into_string(),value.into_string()));
+        Ok("Ok".into())
     }
 }
 
@@ -255,8 +314,8 @@ impl volo_gen::mini_redis::RedisService for S {
             for slave in self.slaves.lock().unwrap().iter_mut() {
                 let slave_clone = slave.clone();
                 let _request_new = DelRequest {
-                    key: _request.key.clone(),
                     sync: true,
+                    .._request.clone()
                 };
                 tokio::spawn(async move {
                     let _ = slave_clone.del(_request_new).await;
@@ -377,6 +436,24 @@ impl volo_gen::mini_redis::RedisService for S {
             .iter()
             .map(|(k, v)| (FastStr::from(k.clone()), FastStr::from(v.clone())))
             .collect())
+    }
+    async fn multi(
+        &self,
+    ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
+        Err(anyhow!("Cant watch on slave").into())
+    }
+    async fn exec(
+        &self,
+        _transaction_id: i32,
+    ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
+        Err(anyhow!("Cant watch on slave").into())
+    }
+    async fn watch(
+        &self,
+        _key: FastStr,
+        _transaction_id: i32,
+    ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
+        Err(anyhow!("Cant watch on slave").into())
     }
 }
 

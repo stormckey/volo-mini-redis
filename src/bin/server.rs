@@ -18,6 +18,10 @@ use tokio::sync::broadcast;
 async fn main() {
     let args = ServerArgs::from_args();
     let myport = args.port;
+    let master = match args.server_type {
+        ServerType::Master {} => true,
+        _ => false,
+    };
     let addr: SocketAddr = ("[::]:".to_owned() + &myport).parse().unwrap();
     let addr = volo::net::Address::from(addr);
     let (_proxy, servers) = parse();
@@ -64,6 +68,7 @@ async fn main() {
                     servers,
                     id: tokio::sync::Mutex::new(0),
                     transactions: tokio::sync::Mutex::new(HashMap::new()),
+                    watches: tokio::sync::Mutex::new(HashMap::new()),
                 }
             }) // .layer_front(LogLayer)
             .layer_front(FilterLayer)
@@ -72,8 +77,7 @@ async fn main() {
             .unwrap();
             ()
         }
-        ms => {
-            let ser = volo_gen::mini_redis::RedisServiceServer::new({
+        ms => {volo_gen::mini_redis::RedisServiceServer::new({
                 let mut s = S {
                     master: match ms {
                         ServerType::Master {} => true,
@@ -159,23 +163,25 @@ async fn main() {
             })
             .layer_front(FilterLayer).run(addr).await.unwrap();
 
-            let buf_clone = Arc::clone(&pre_buf);
-            let handle = tokio::spawn(async move {
-                let mut file = OpenOptions::new()
-                    .append(true)
-                    .read(true)
-                    .create(true)
-                    .open(myport.clone() + &".log")
-                    .expect("Cant open file");
-                let buf = buf_clone.lock().await;
-                file.write_all((buf.join("\n") + "\n").as_bytes()).unwrap();
-            });
-            pre_handle.lock().await.push(handle);
-            tokio::join!(async {
-                for handle in pre_handle.lock().await.iter_mut() {
-                    handle.await.unwrap();
-                }
-            });
+            if master{
+                let buf_clone = Arc::clone(&pre_buf);
+                let handle = tokio::spawn(async move {
+                    let mut file = OpenOptions::new()
+                        .append(true)
+                        .read(true)
+                        .create(true)
+                        .open(myport.clone() + &".log")
+                        .expect("Cant open file");
+                    let buf = buf_clone.lock().await;
+                    file.write_all((buf.join("\n") + "\n").as_bytes()).unwrap();
+                });
+                pre_handle.lock().await.push(handle);
+                tokio::join!(async {
+                    for handle in pre_handle.lock().await.iter_mut() {
+                        handle.await.unwrap();
+                    }
+                });
+            }
         }
     }
 }
