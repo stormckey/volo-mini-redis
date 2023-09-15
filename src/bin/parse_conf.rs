@@ -6,6 +6,12 @@ fn main() {
     let (proxy, vec) = parse();
     let mut file = File::create("begin.sh").expect("Cant create begin.sh");
     file.write_all("#! /bin/bash\n".as_bytes()).unwrap();
+    file.write_all((format!("lsof -ti :{} | xargs kill -9\n",proxy)).as_bytes()).unwrap();
+    for v in &vec{
+        for port in v{
+            file.write_all((format!("lsof -ti :{} | xargs kill -9\n", port)).as_bytes()).unwrap();
+        }
+    }
     for v in vec {
         let master = v.iter().next().unwrap();
         file.write_all((format!("echo \"server -p {} master &\"\n", master)).as_bytes())

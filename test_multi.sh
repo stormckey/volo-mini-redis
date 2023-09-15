@@ -4,7 +4,6 @@ echo_and_run() {
     echo "$@"
     eval "$@"
 }
-
 echo_and_run source begin.sh
 sleep 0.5
 echo_and_run client del thu

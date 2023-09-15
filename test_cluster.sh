@@ -1,5 +1,5 @@
 #!   /bin/bash
-  
+
 echo "rm -rf *.log"
 rm -rf *.log
 echo "source begin.sh"
