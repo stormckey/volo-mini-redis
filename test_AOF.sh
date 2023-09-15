@@ -1,4 +1,5 @@
 #! /bin/bash
+lsof -ti :8888 | xargs kill -9
 
 echo "server -p 8888 master &"
 server -p 8888 master &
@@ -22,5 +23,3 @@ echo "client -p 8888 del zju"
 client -p 8888 del zju
 echo "client -p 8888 set pku 1"
 client -p 8888 set pku 1
-
-kill -2 %2
