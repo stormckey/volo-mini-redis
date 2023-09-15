@@ -69,6 +69,7 @@ async fn main() {
                     id: tokio::sync::Mutex::new(0),
                     transactions: tokio::sync::Mutex::new(HashMap::new()),
                     watches: tokio::sync::Mutex::new(HashMap::new()),
+                    watched_transactions: tokio::sync::Mutex::new(HashMap::new()),
                 }
             }) // .layer_front(LogLayer)
             .layer_front(FilterLayer)

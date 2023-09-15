@@ -35,3 +35,15 @@ set thu 1
 set zju 3
 set zju 1
 set thu 3
+del thu
+del zju
+set zju 3
+set thu 1
+
+set zju 3
+set zju 1
+set thu 3
+set thu 1
+set zju 3
+set zju 1
+set thu 3

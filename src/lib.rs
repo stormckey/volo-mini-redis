@@ -31,7 +31,8 @@ pub struct Proxy {
     pub servers: Vec<Vec<String>>,
     pub id: tokio::sync::Mutex<i32>,
     pub transactions: tokio::sync::Mutex<HashMap<i32, Vec<(Option<volo_gen::mini_redis::SetRequest>,Option<volo_gen::mini_redis::DelRequest>)>>>,
-    pub watches: tokio::sync::Mutex<HashMap<i32,Vec<(String,String)>>>,
+    pub watches: tokio::sync::Mutex<HashMap<i32,String>>,
+    pub watched_transactions: tokio::sync::Mutex<HashMap<i32,bool>>,
 }
 pub struct P {}
 
@@ -54,6 +55,15 @@ impl volo_gen::mini_redis::RedisService for Proxy {
                 .push((Some(_request.clone()),None));
             return Ok("Ok".into());
         }
+        // if self.watched_transactions.lock().await.contains_key(&_request.key) {
+            for (id, key) in self.watches.lock().await.iter_mut() {
+                println!("{} {}",id,key);
+                if key == &_request.key.clone().into_string() {
+                    let mut watched_transactions = self.watched_transactions.lock().await;
+                    watched_transactions.insert(*id, false);
+                } 
+            }
+        // }
         let clients = self.clients.lock().await;
         let idx1 = _request.key.as_str().as_bytes()[0] as usize % clients.len();
         println!("Request is forwarded to port {}", self.servers[idx1][0]);
@@ -157,25 +167,29 @@ impl volo_gen::mini_redis::RedisService for Proxy {
             return Err(anyhow!("No such transaction").into());
         };
         //check the watches
-        let mut watches = self.watches.lock().await;
+        let watches = self.watches.lock().await;
         if watches.contains_key(&_transaction_id) {
-            for (key,value) in watches.get_mut(&_transaction_id).unwrap() {
-                let clients = self.clients.lock().await;
-                let idx1 = key.as_str().as_bytes()[0] as usize % clients.len();
-                let idx2 = *self.count[idx1].lock().await % (clients[idx1].len() - 1) + 1;
-                *self.count[idx1].lock().await += 1;
-                println!("Request is forwarded to port {}", self.servers[idx1][idx2]);
-                let client = clients[idx1][idx2].clone();
-                let resp = client.get(key.clone().into()).await;
-                match resp {
-                    Err(e) => return Err(e.into()),
-                    Ok(res) => {
-                        if res != *value {
-                            return Err(anyhow!("Watch failed").into());
-                        }
-                    }
-                }
+            let watched_transactions = self.watched_transactions.lock().await;
+            if !watched_transactions[&_transaction_id] {
+                return Err(anyhow!("Watch failed").into());
             }
+            // for (key,value) in watches.get_mut(&_transaction_id).unwrap() {
+            //     let clients = self.clients.lock().await;
+            //     let idx1 = key.as_str().as_bytes()[0] as usize % clients.len();
+            //     let idx2 = *self.count[idx1].lock().await % (clients[idx1].len() - 1) + 1;
+            //     *self.count[idx1].lock().await += 1;
+            //     println!("Request is forwarded to port {}", self.servers[idx1][idx2]);
+            //     let client = clients[idx1][idx2].clone();
+            //     let resp = client.get(key.clone().into()).await;
+            //     match resp {
+            //         Err(e) => return Err(e.into()),
+            //         Ok(res) => {
+            //             if res != *value {
+            //                 return Err(anyhow!("Watch failed").into());
+            //             }
+            //         }
+            //     }
+            // }
         }
         let mut transactions = self.transactions.lock().await;
         for (set,del) in transactions.get_mut(&_transaction_id).unwrap() {
@@ -217,12 +231,13 @@ impl volo_gen::mini_redis::RedisService for Proxy {
         _key: FastStr,
         _transaction_id: i32,
     ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
-        let value = self.get(_key.clone()).await?;
+        // let value = self.get(_key.clone()).await?;
         let mut watches = self.watches.lock().await;
+        let mut watched_transactions = self.watched_transactions.lock().await;
         if !watches.contains_key(&_transaction_id) {
-            watches.insert(_transaction_id,vec![]);
+            watches.insert(_transaction_id, _key.into_string());
+            watched_transactions.insert(_transaction_id, true);
         };
-        watches.get_mut(&_transaction_id).unwrap().push((_key.into_string(),value.into_string()));
         Ok("Ok".into())
     }
 }
