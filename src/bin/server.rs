@@ -70,6 +70,7 @@ async fn main() {
                     transactions: tokio::sync::Mutex::new(HashMap::new()),
                     watches: tokio::sync::Mutex::new(HashMap::new()),
                     watched_transactions: tokio::sync::Mutex::new(HashMap::new()),
+                    channels: Mutex::new(HashMap::<String, broadcast::Sender<String>>::new()),
                 }
             }) // .layer_front(LogLayer)
             .layer_front(FilterLayer)
@@ -86,7 +87,6 @@ async fn main() {
                     },
                     port: myport.parse().unwrap(),
                     map: Arc::new(Mutex::new(HashMap::<String, String>::new())),
-                    channels: Mutex::new(HashMap::<String, broadcast::Sender<String>>::new()),
                     file: match ms {
                         ServerType::Master {} => Some(Arc::new(tokio::sync::Mutex::new(
                             OpenOptions::new()
