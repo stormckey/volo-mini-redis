@@ -1,6 +1,7 @@
 # volo-mini-redis
 
 A simple mini-redis implementation in Rust. With VOLO.
+WARNING: This mini_redis is ran over a filter, any action that contains "Genshin" will be blocked. Try it out!
 
 ## Usage
 
