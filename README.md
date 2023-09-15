@@ -20,7 +20,7 @@ server -p [port] [ master | slave [master_port] | proxy ]
 use client to connect to the server:
 
 ```bash
-client -p [port] [ set [key] [value] |  get [key] |  del [key] |  ping [key] | ]
+client -p [port]  [set key value [--expire sec]|  get key |  del key |  ping [key] | subscribe channel -a [other channnel] | publish  channel message ]
 ```
 
 ## Shell scripts
@@ -47,9 +47,12 @@ To start up a cluster. first write config in `server.conf` like this:
 `test_AOF|master_slave|cluster|multi|watch.sh` is used to test each the functions of the server.
 `test_all.sh` will run all the tests.
 
+change src/arg.rs to set the proper default port for client and server. Now all 8000 
+
 ## Features
 
 - Graceful Exit
 - Transaction
 
 For more info, please read the ppt.
+

@@ -18,7 +18,6 @@ pub struct S {
     pub master: bool,
     pub port: u16,
     pub map: Arc<Mutex<HashMap<String, String>>>,
-    pub channels: Mutex<HashMap<String, broadcast::Sender<String>>>,
     pub file: Option<Arc<tokio::sync::Mutex<std::fs::File>>>,
     pub slaves: Mutex<Vec<volo_gen::mini_redis::RedisServiceClient>>,
     pub buf: Arc<tokio::sync::Mutex<Vec<String>>>,
@@ -30,6 +29,7 @@ pub struct Proxy {
     pub count: Vec<tokio::sync::Mutex<usize>>,
     pub servers: Vec<Vec<String>>,
     pub id: tokio::sync::Mutex<i32>,
+    pub channels: Mutex<HashMap<String, broadcast::Sender<String>>>,
     pub transactions: tokio::sync::Mutex<HashMap<i32, Vec<(Option<volo_gen::mini_redis::SetRequest>,Option<volo_gen::mini_redis::DelRequest>)>>>,
     pub watches: tokio::sync::Mutex<HashMap<i32,String>>,
     pub watched_transactions: tokio::sync::Mutex<HashMap<i32,bool>>,
@@ -132,15 +132,65 @@ impl volo_gen::mini_redis::RedisService for Proxy {
         _request: volo_gen::mini_redis::SubsrcibeRequest,
     ) -> ::core::result::Result<volo_gen::mini_redis::SubscribeResponse, ::volo_thrift::AnyhowError>
     {
-        Ok(SubscribeResponse {
-            message: "Ok".into(),
-            trap: true,
-        })
+        match _request.block {
+            true => {
+                let mut vec = self
+                    .channels
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(k, _v)| _request.channels.contains(&FastStr::from((*k).clone())))
+                    .map(|(k, v)| (v.subscribe(), k.clone()))
+                    .collect::<Vec<_>>();
+                let (res, index, _) =
+                    select_all(vec.iter_mut().map(|(rx, _name)| Box::pin(rx.recv()))).await;
+                match res {
+                    Ok(info) => Ok(SubscribeResponse {
+                        message: (String::from("from ") + &vec[index].1 + ": " + &info).into(),
+
+                        trap: true,
+                    }),
+                    Err(_) => Ok(SubscribeResponse {
+                        message: "Error".into(),
+                        trap: true,
+                    }),
+                }
+            }
+            false => {
+                for channel in _request.channels {
+                    if !self
+                        .channels
+                        .lock()
+                        .unwrap()
+                        .contains_key(&channel.clone().into_string())
+                    {
+                        let (tx, _) = broadcast::channel(10);
+                        self.channels
+                            .lock()
+                            .unwrap()
+                            .insert(channel.clone().into_string(), tx);
+                    }
+                }
+                Ok(SubscribeResponse {
+                    message: "Ok".into(),
+                    trap: true,
+                })
+            }
+        }
     }
     async fn publish(
         &self,
         _request: volo_gen::mini_redis::PublishRequest,
     ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
+        let channel = _request.channel.clone().into_string();
+        let _ = self
+            .channels
+            .lock()
+            .unwrap()
+            .get(&channel)
+            .unwrap()
+            .send(_request.message.into_string())
+            .unwrap();
         Ok("Ok".into())
     }
     async fn register(
@@ -166,30 +216,12 @@ impl volo_gen::mini_redis::RedisService for Proxy {
         if !self.transactions.lock().await.contains_key(&_transaction_id) {
             return Err(anyhow!("No such transaction").into());
         };
-        //check the watches
         let watches = self.watches.lock().await;
         if watches.contains_key(&_transaction_id) {
             let watched_transactions = self.watched_transactions.lock().await;
             if !watched_transactions[&_transaction_id] {
                 return Err(anyhow!("Watch failed").into());
             }
-            // for (key,value) in watches.get_mut(&_transaction_id).unwrap() {
-            //     let clients = self.clients.lock().await;
-            //     let idx1 = key.as_str().as_bytes()[0] as usize % clients.len();
-            //     let idx2 = *self.count[idx1].lock().await % (clients[idx1].len() - 1) + 1;
-            //     *self.count[idx1].lock().await += 1;
-            //     println!("Request is forwarded to port {}", self.servers[idx1][idx2]);
-            //     let client = clients[idx1][idx2].clone();
-            //     let resp = client.get(key.clone().into()).await;
-            //     match resp {
-            //         Err(e) => return Err(e.into()),
-            //         Ok(res) => {
-            //             if res != *value {
-            //                 return Err(anyhow!("Watch failed").into());
-            //             }
-            //         }
-            //     }
-            // }
         }
         let mut transactions = self.transactions.lock().await;
         for (set,del) in transactions.get_mut(&_transaction_id).unwrap() {
@@ -294,14 +326,6 @@ impl volo_gen::mini_redis::RedisService for S {
                     buf.clear();
                 });
                 self.handles.lock().await.push(handle);
-                // self.file
-                //     .as_ref()
-                //     .await
-                //     .lock()
-                //     .unwrap()
-                //     .write_all((buf.join("\n") + "\n").as_bytes())
-                //     .unwrap();
-                // buf.clear();
             }
         }
         Ok("Ok".into())
@@ -371,66 +395,16 @@ impl volo_gen::mini_redis::RedisService for S {
         _request: volo_gen::mini_redis::SubsrcibeRequest,
     ) -> ::core::result::Result<volo_gen::mini_redis::SubscribeResponse, ::volo_thrift::AnyhowError>
     {
-        match _request.block {
-            true => {
-                let mut vec = self
-                    .channels
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|(k, _v)| _request.channels.contains(&FastStr::from((*k).clone())))
-                    .map(|(k, v)| (v.subscribe(), k.clone()))
-                    .collect::<Vec<_>>();
-                let (res, index, _) =
-                    select_all(vec.iter_mut().map(|(rx, _name)| Box::pin(rx.recv()))).await;
-                match res {
-                    Ok(info) => Ok(SubscribeResponse {
-                        message: (String::from("from ") + &vec[index].1 + ": " + &info).into(),
-
-                        trap: true,
-                    }),
-                    Err(_) => Ok(SubscribeResponse {
-                        message: "Error".into(),
-                        trap: true,
-                    }),
-                }
-            }
-            false => {
-                for channel in _request.channels {
-                    if !self
-                        .channels
-                        .lock()
-                        .unwrap()
-                        .contains_key(&channel.clone().into_string())
-                    {
-                        let (tx, _) = broadcast::channel(10);
-                        self.channels
-                            .lock()
-                            .unwrap()
-                            .insert(channel.clone().into_string(), tx);
-                    }
-                }
-                Ok(SubscribeResponse {
-                    message: "Ok".into(),
-                    trap: true,
-                })
-            }
-        }
+        Ok(SubscribeResponse {
+            message: "Impl on proxy, not here".into(),
+            trap: true,
+        })
     }
     async fn publish(
         &self,
         _request: volo_gen::mini_redis::PublishRequest,
     ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
-        let channel = _request.channel.clone().into_string();
-        let _ = self
-            .channels
-            .lock()
-            .unwrap()
-            .get(&channel)
-            .unwrap()
-            .send(_request.message.into_string())
-            .unwrap();
-        Ok("Ok".into())
+        Ok("Impl on proxy, not here".into())
     }
     async fn register(
         &self,

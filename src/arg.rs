@@ -74,6 +74,6 @@ pub struct ServerArgs {
     #[structopt(subcommand)]
     pub server_type: ServerType,
 
-    #[structopt(short, long, default_value = "8081")]
+    #[structopt(short, long, default_value = "8000")]
     pub port: String,
 }
