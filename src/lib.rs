@@ -31,7 +31,7 @@ pub struct Proxy {
     pub id: tokio::sync::Mutex<i32>,
     pub channels: Mutex<HashMap<String, broadcast::Sender<String>>>,
     pub transactions: tokio::sync::Mutex<HashMap<i32, Vec<(Option<volo_gen::mini_redis::SetRequest>,Option<volo_gen::mini_redis::DelRequest>)>>>,
-    pub watches: tokio::sync::Mutex<HashMap<i32,String>>,
+    pub watches: tokio::sync::Mutex<HashMap<i32,Vec<String>>>,
     pub watched_transactions: tokio::sync::Mutex<HashMap<i32,bool>>,
 }
 pub struct P {}
@@ -55,15 +55,14 @@ impl volo_gen::mini_redis::RedisService for Proxy {
                 .push((Some(_request.clone()),None));
             return Ok("Ok".into());
         }
-        // if self.watched_transactions.lock().await.contains_key(&_request.key) {
-            for (id, key) in self.watches.lock().await.iter_mut() {
-                println!("{} {}",id,key);
+        for (id, keys) in self.watches.lock().await.iter_mut() {
+            for key in keys {
                 if key == &_request.key.clone().into_string() {
                     let mut watched_transactions = self.watched_transactions.lock().await;
                     watched_transactions.insert(*id, false);
-                } 
+                }
             }
-        // }
+        }
         let clients = self.clients.lock().await;
         let idx1 = _request.key.as_str().as_bytes()[0] as usize % clients.len();
         println!("Request is forwarded to port {}", self.servers[idx1][0]);
@@ -106,6 +105,14 @@ impl volo_gen::mini_redis::RedisService for Proxy {
                 .unwrap()
                 .push((None,Some(_request.clone())));
             return Ok("Ok".into());
+        }
+        for (id, keys) in self.watches.lock().await.iter_mut() {
+            for key in keys {
+                if key == &_request.key.clone().into_string() {
+                    let mut watched_transactions = self.watched_transactions.lock().await;
+                    watched_transactions.insert(*id, false);
+                }
+            }
         }
         let clients = self.clients.lock().await;
         let idx1 = _request.key.as_str().as_bytes()[0] as usize % clients.len();
@@ -263,13 +270,13 @@ impl volo_gen::mini_redis::RedisService for Proxy {
         _key: FastStr,
         _transaction_id: i32,
     ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
-        // let value = self.get(_key.clone()).await?;
         let mut watches = self.watches.lock().await;
         let mut watched_transactions = self.watched_transactions.lock().await;
         if !watches.contains_key(&_transaction_id) {
-            watches.insert(_transaction_id, _key.into_string());
-            watched_transactions.insert(_transaction_id, true);
+            watches.insert(_transaction_id, vec![]);
         };
+        watches.get_mut(&_transaction_id).unwrap().push(_key.clone().into_string());
+        watched_transactions.insert(_transaction_id, true);
         Ok("Ok".into())
     }
 }
