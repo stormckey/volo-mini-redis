@@ -13,6 +13,9 @@ use volo::FastStr;
 use volo_gen::mini_redis::DelRequest;
 pub mod arg;
 pub mod parse;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use volo_gen::mini_redis::SubscribeResponse;
 pub struct S {
     pub master: bool,
@@ -35,6 +38,12 @@ pub struct Proxy {
     pub watched_transactions: tokio::sync::Mutex<HashMap<i32,bool>>,
 }
 pub struct P {}
+
+fn get_hash(key: &str) -> u64 {
+    let mut hasher  = DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
 
 #[volo::async_trait]
 impl volo_gen::mini_redis::RedisService for Proxy {
@@ -64,7 +73,10 @@ impl volo_gen::mini_redis::RedisService for Proxy {
             }
         }
         let clients = self.clients.lock().await;
-        let idx1 = _request.key.as_str().as_bytes()[0] as usize % clients.len();
+        let mut hasher  = DefaultHasher::new();
+        _request.key.as_str().hash(&mut hasher);
+        // let idx1 = hasher.finish() as usize % clients.len();
+        let idx1 = get_hash(&_request.key) as usize % clients.len();
         println!("Request is forwarded to port {}", self.servers[idx1][0]);
         let client =
             clients[_request.key.as_str().as_bytes()[0] as usize % clients.len()][0].clone();
@@ -78,7 +90,8 @@ impl volo_gen::mini_redis::RedisService for Proxy {
         _key: FastStr,
     ) -> ::core::result::Result<FastStr, ::volo_thrift::AnyhowError> {
         let clients = self.clients.lock().await;
-        let idx1 = _key.as_str().as_bytes()[0] as usize % clients.len();
+        let idx1 = get_hash(&_key) as usize % clients.len();
+        // let idx1 = _key.as_str().as_bytes()[0] as usize % clients.len();
         let idx2 = *self.count[idx1].lock().await % (clients[idx1].len() - 1) + 1;
         *self.count[idx1].lock().await += 1;
         println!("Request is forwarded to port {}", self.servers[idx1][idx2]);
@@ -115,7 +128,8 @@ impl volo_gen::mini_redis::RedisService for Proxy {
             }
         }
         let clients = self.clients.lock().await;
-        let idx1 = _request.key.as_str().as_bytes()[0] as usize % clients.len();
+        // let idx1 = _request.key.as_str().as_bytes()[0] as usize % clients.len();
+        let idx1 = get_hash(&_request.key) as usize % clients.len();
         let client = clients[idx1][0].clone();
         println!("Request is forwarded to port {}", self.servers[idx1][0]);
         match client.del(_request).await {
